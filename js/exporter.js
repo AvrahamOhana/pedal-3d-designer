@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import JSZip from 'jszip';
 import { buildExportMeshes } from './csg.js';
