@@ -423,8 +423,8 @@ export function getModelRotation(face) {
     case 'top':   return new THREE.Euler(0, 0, 0);                       // +Y stays +Y (up)
     case 'front': return new THREE.Euler(Math.PI / 2, 0, 0);            // +Y -> +Z (front)
     case 'back':  return new THREE.Euler(-Math.PI / 2, 0, 0);           // +Y -> -Z (back)
-    case 'left':  return new THREE.Euler(0, 0, Math.PI / 2);            // +Y -> -X (left)
-    case 'right': return new THREE.Euler(0, 0, -Math.PI / 2);           // +Y -> +X (right)
+    case 'left':  return new THREE.Euler(Math.PI / 2, 0, -Math.PI / 2); // +Y -> -X, width horizontal
+    case 'right': return new THREE.Euler(Math.PI / 2, 0, Math.PI / 2);  // +Y -> +X, width horizontal
     default:      return new THREE.Euler(0, 0, 0);
   }
 }
