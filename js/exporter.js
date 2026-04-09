@@ -18,17 +18,17 @@ export async function exportSTL(dims, screwType, screwPositions, placedComponent
     dims, screwType, screwPositions, placedComponents, componentDefs
   );
 
-  // Rotate from Y-up (Three.js) to Z-up (STL/slicer convention)
-  const yToZ = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
-
-  // Bottom: flip 180° so open cavity faces up (printable without supports)
+  // Convert Y-up (Three.js) to Z-up (STL/slicer convention)
+  // rotX(-PI/2): Y -> -Z, Z -> Y. So Three.js +Y (up) becomes -Z (down in slicer).
+  // Bottom: open side is at high Y in Three.js. After rotX(-PI/2) it faces -Z (down).
+  // Add rotX(PI) to flip it: open side faces +Z (up). Print on the flat floor.
   const bottomRot = new THREE.Matrix4()
-    .makeRotationX(-Math.PI / 2)
-    .multiply(new THREE.Matrix4().makeRotationY(Math.PI));
+    .multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2));
   bottomMesh.geometry.applyMatrix4(bottomRot);
 
-  // Lid: top face down on print bed (flat surface down)
-  lidMesh.geometry.applyMatrix4(yToZ);
+  // Lid: flat top at high Y. After rotX(-PI/2) it faces -Z (down on bed). Good.
+  const lidRot = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+  lidMesh.geometry.applyMatrix4(lidRot);
 
   const exporter = new STLExporter();
   const bottomSTL = exporter.parse(bottomMesh, { binary: true }).buffer;
