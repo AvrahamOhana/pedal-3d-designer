@@ -206,13 +206,14 @@ function getHoleHalf(comp) {
 }
 
 /** World point -> face-local (u, v) centered at face center */
-function worldToLocal(face, point) {
+function worldToLocal(face, point, dims) {
+  const cy = dims ? dims.bottomH / 2 : 0;
   switch (face) {
     case 'top':   return { u: point.x, v: point.z };
     case 'front':
-    case 'back':  return { u: point.x, v: point.y };
+    case 'back':  return { u: point.x, v: point.y - cy };
     case 'left':
-    case 'right': return { u: point.z, v: point.y };
+    case 'right': return { u: point.z, v: point.y - cy };
     default:      return { u: 0, v: 0 };
   }
 }
@@ -220,12 +221,13 @@ function worldToLocal(face, point) {
 /** Face-local (u, v) -> world position (with small offset to avoid z-fighting) */
 function localToWorld(face, u, v, dims) {
   const topY = dims.bottomH + dims.lidThick;
+  const cy = dims.bottomH / 2;  // center Y of side faces
   switch (face) {
     case 'top':   return new THREE.Vector3(u, topY + 0.1, v);
-    case 'front': return new THREE.Vector3(u, v, dims.outerD / 2 + 0.1);
-    case 'back':  return new THREE.Vector3(u, v, -dims.outerD / 2 - 0.1);
-    case 'left':  return new THREE.Vector3(-dims.outerW / 2 - 0.1, v, u);
-    case 'right': return new THREE.Vector3(dims.outerW / 2 + 0.1, v, u);
+    case 'front': return new THREE.Vector3(u, v + cy, dims.outerD / 2 + 0.1);
+    case 'back':  return new THREE.Vector3(u, v + cy, -dims.outerD / 2 - 0.1);
+    case 'left':  return new THREE.Vector3(-dims.outerW / 2 - 0.1, v + cy, u);
+    case 'right': return new THREE.Vector3(dims.outerW / 2 + 0.1, v + cy, u);
     default:      return new THREE.Vector3(0, 0, 0);
   }
 }
@@ -567,9 +569,9 @@ viewport.addEventListener('pointermove', (e) => {
 
     const hits = raycaster.intersectObject(facePlane);
     if (hits.length > 0) {
-      const local = worldToLocal(placed.face, hits[0].point);
       const comp = COMPONENTS[placed.type];
       const dims = state.enclosure.dims;
+      const local = worldToLocal(placed.face, hits[0].point, dims);
       const constrained = constrainUV(local.u, local.v, comp, placed.face, dims);
       const hasOverlap = checkOverlap(placed.type, placed.face, constrained.u, constrained.v, dragComponentId);
 
@@ -612,8 +614,8 @@ viewport.addEventListener('pointermove', (e) => {
   ghostValid = isValid;
   ghostFace = face;
 
-  const local = worldToLocal(face, hit.point);
   const dims = state.enclosure.dims;
+  const local = worldToLocal(face, hit.point, dims);
   const constrained = constrainUV(local.u, local.v, comp, face, dims);
   const worldPos = localToWorld(face, constrained.u, constrained.v, dims);
 
@@ -690,9 +692,9 @@ viewport.addEventListener('pointerup', (e) => {
 
   // --- Click to place ---
   if (state.activeComponent && ghostMesh && ghostMesh.visible && ghostValid && ghostFace) {
-    const local = worldToLocal(ghostFace, ghostMesh.position);
     const comp = COMPONENTS[state.activeComponent];
     const dims = state.enclosure.dims;
+    const local = worldToLocal(ghostFace, ghostMesh.position, dims);
     const constrained = constrainUV(local.u, local.v, comp, ghostFace, dims);
 
     // Final safety checks: edge proximity + overlap
