@@ -117,9 +117,14 @@ let nextComponentId = 1;
 // Drag state
 let isDragging = false;
 let dragComponentId = null;
+let dragPrevLocalPos = null; // for undo on drag
 let pointerDownPos = null;
 let pointerMoved = false;
 const DRAG_THRESHOLD = 4; // pixels
+
+// Undo stack
+const undoStack = [];
+const UNDO_LIMIT = 50;
 
 // ============================================================
 // Geometry / mesh helpers
@@ -252,6 +257,125 @@ function constrainUV(u, v, comp, face, dims) {
   u = Math.max(-uMax, Math.min(uMax, u));
   v = Math.max(-vMax, Math.min(vMax, v));
   return { u, v };
+}
+
+// ============================================================
+// Overlap detection
+// ============================================================
+
+/** Effective radius of a component for overlap checks */
+function getEffectiveRadius(comp) {
+  if (comp.holeShape === 'circle') {
+    return comp.holeDiameter / 2;
+  }
+  return Math.max(comp.holeWidth, comp.holeHeight) / 2;
+}
+
+/** Check if placing a component at (u, v) on the given face overlaps any existing component.
+ *  excludeId: optional component id to skip (used during drag). */
+function checkOverlap(compKey, face, u, v, excludeId) {
+  const comp = COMPONENTS[compKey];
+  if (!comp) return false;
+  const r1 = getEffectiveRadius(comp);
+
+  for (const placed of state.placedComponents) {
+    if (placed.id === excludeId) continue;
+    if (placed.face !== face) continue;
+
+    const otherComp = COMPONENTS[placed.type];
+    if (!otherComp) continue;
+    const r2 = getEffectiveRadius(otherComp);
+
+    const du = u - placed.localPos.u;
+    const dv = v - placed.localPos.v;
+    const dist = Math.sqrt(du * du + dv * dv);
+    const minDist = r1 + r2 + 1; // 1mm gap
+
+    if (dist < minDist) return true;
+  }
+  return false;
+}
+
+/** Edge validation: returns true if position is too close to edge */
+function checkEdgeViolation(compKey, face, u, v) {
+  if (!state.enclosure) return false;
+  const comp = COMPONENTS[compKey];
+  if (!comp) return false;
+  const dims = state.enclosure.dims;
+  const { uSize, vSize } = getFaceDims(face, dims);
+  const { hu, hv } = getHoleHalf(comp);
+  const uMax = uSize / 2 - hu - 1;
+  const vMax = vSize / 2 - hv - 1;
+  return Math.abs(u) > uMax + 0.01 || Math.abs(v) > vMax + 0.01;
+}
+
+// ============================================================
+// Undo support
+// ============================================================
+
+function pushUndo(action) {
+  undoStack.push(action);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+}
+
+function performUndo() {
+  if (undoStack.length === 0) return;
+  const action = undoStack.pop();
+
+  switch (action.type) {
+    case 'place': {
+      // Undo a placement: delete the component
+      deleteComponent(action.componentId);
+      break;
+    }
+    case 'delete': {
+      // Undo a deletion: re-place the component
+      const data = action.componentData;
+      const comp = COMPONENTS[data.type];
+      if (!comp || !state.enclosure) break;
+
+      const dims = state.enclosure.dims;
+      const worldPos = localToWorld(data.face, data.localPos.u, data.localPos.v, dims);
+
+      const marker = createComponentMesh(comp, {
+        color: comp.color,
+        transparent: comp.holeShape === 'roundrect',
+        opacity: comp.holeShape === 'roundrect' ? 0.8 : 1.0,
+      });
+      marker.position.copy(worldPos);
+      marker.rotation.copy(getFaceRotation(data.face));
+      marker.userData.componentId = data.id;
+      scene.add(marker);
+      markerMeshes.push(marker);
+
+      state.placedComponents.push({
+        id: data.id,
+        type: data.type,
+        face: data.face,
+        position: { x: worldPos.x, y: worldPos.y, z: worldPos.z },
+        localPos: { u: data.localPos.u, v: data.localPos.v },
+      });
+
+      // Ensure nextComponentId stays ahead
+      if (data.id >= nextComponentId) nextComponentId = data.id + 1;
+
+      updatePlacedList();
+      updatePartCount();
+      break;
+    }
+    case 'move': {
+      // Undo a move: restore previous position
+      moveComponent(action.componentId, action.prevU, action.prevV);
+      if (state.selectedId === action.componentId) {
+        const placed = state.placedComponents.find(c => c.id === action.componentId);
+        if (placed) {
+          if (propXInput) propXInput.value = placed.localPos.u.toFixed(1);
+          if (propYInput) propYInput.value = placed.localPos.v.toFixed(1);
+        }
+      }
+      break;
+    }
+  }
 }
 
 // ============================================================
@@ -444,6 +568,18 @@ viewport.addEventListener('pointermove', (e) => {
     const hits = raycaster.intersectObject(facePlane);
     if (hits.length > 0) {
       const local = worldToLocal(placed.face, hits[0].point);
+      const comp = COMPONENTS[placed.type];
+      const dims = state.enclosure.dims;
+      const constrained = constrainUV(local.u, local.v, comp, placed.face, dims);
+      const hasOverlap = checkOverlap(placed.type, placed.face, constrained.u, constrained.v, dragComponentId);
+
+      const marker = markerMeshes.find(m => m.userData.componentId === dragComponentId);
+      if (marker) {
+        marker.material.color.setHex(hasOverlap ? 0xff4444 : 0x4488ff);
+      }
+      // Store drag-valid state on the marker for use in pointerup
+      if (marker) marker.userData.dragInvalid = hasOverlap;
+
       moveComponent(dragComponentId, local.u, local.v);
 
       if (propXInput) propXInput.value = placed.localPos.u.toFixed(1);
@@ -481,9 +617,13 @@ viewport.addEventListener('pointermove', (e) => {
   const constrained = constrainUV(local.u, local.v, comp, face, dims);
   const worldPos = localToWorld(face, constrained.u, constrained.v, dims);
 
+  // Check for overlap with existing components
+  const hasOverlap = isValid && checkOverlap(state.activeComponent, face, constrained.u, constrained.v);
+  ghostValid = isValid && !hasOverlap;
+
   ghostMesh.position.copy(worldPos);
   ghostMesh.rotation.copy(getFaceRotation(face));
-  ghostMesh.material.color.setHex(isValid ? 0x00ff88 : 0xff4444);
+  ghostMesh.material.color.setHex(ghostValid ? 0x00ff88 : 0xff4444);
   ghostMesh.visible = true;
 });
 
@@ -499,6 +639,9 @@ viewport.addEventListener('pointerdown', (e) => {
     if (hits.length > 0 && hits[0].object.userData.componentId === state.selectedId) {
       isDragging = true;
       dragComponentId = state.selectedId;
+      // Save position for undo
+      const placed = state.placedComponents.find(c => c.id === state.selectedId);
+      dragPrevLocalPos = placed ? { u: placed.localPos.u, v: placed.localPos.v } : null;
       controls.enabled = false;
       viewport.setPointerCapture(e.pointerId);
       e.preventDefault();
@@ -508,16 +651,35 @@ viewport.addEventListener('pointerdown', (e) => {
 
 viewport.addEventListener('pointerup', (e) => {
   const wasDragging = isDragging;
+  const prevDragId = dragComponentId;
+  const prevDragPos = dragPrevLocalPos;
 
   if (isDragging) {
+    // Check if drag ended in invalid (overlapping) position
+    const marker = markerMeshes.find(m => m.userData.componentId === dragComponentId);
+    if (marker && marker.userData.dragInvalid && prevDragPos) {
+      // Revert to previous position
+      moveComponent(dragComponentId, prevDragPos.u, prevDragPos.v);
+      marker.material.color.setHex(0x4488ff); // restore selected color
+      marker.userData.dragInvalid = false;
+    }
+
     isDragging = false;
     dragComponentId = null;
+    dragPrevLocalPos = null;
     controls.enabled = true;
     viewport.releasePointerCapture(e.pointerId);
   }
 
-  // If it was a real drag (pointer moved), just stop -- don't interpret as click
+  // If it was a real drag (pointer moved), push undo and stop
   if (wasDragging && pointerMoved) {
+    // Push move undo if position actually changed
+    if (prevDragPos && prevDragId != null) {
+      const placed = state.placedComponents.find(c => c.id === prevDragId);
+      if (placed && (placed.localPos.u !== prevDragPos.u || placed.localPos.v !== prevDragPos.v)) {
+        pushUndo({ type: 'move', componentId: prevDragId, prevU: prevDragPos.u, prevV: prevDragPos.v });
+      }
+    }
     pointerDownPos = null;
     return;
   }
@@ -529,7 +691,16 @@ viewport.addEventListener('pointerup', (e) => {
   // --- Click to place ---
   if (state.activeComponent && ghostMesh && ghostMesh.visible && ghostValid && ghostFace) {
     const local = worldToLocal(ghostFace, ghostMesh.position);
-    placeComponent(state.activeComponent, ghostFace, local.u, local.v);
+    const comp = COMPONENTS[state.activeComponent];
+    const dims = state.enclosure.dims;
+    const constrained = constrainUV(local.u, local.v, comp, ghostFace, dims);
+
+    // Final safety checks: edge proximity + overlap
+    if (checkEdgeViolation(state.activeComponent, ghostFace, constrained.u, constrained.v)) return;
+    if (checkOverlap(state.activeComponent, ghostFace, constrained.u, constrained.v)) return;
+
+    const id = placeComponent(state.activeComponent, ghostFace, local.u, local.v);
+    if (id != null) pushUndo({ type: 'place', componentId: id });
     return;
   }
 
@@ -571,10 +742,25 @@ if (propYInput) propYInput.addEventListener('change', onPropChange);
 // Delete button + keyboard shortcuts
 // ============================================================
 
+/** Delete a component with undo support */
+function deleteWithUndo(id) {
+  const placed = state.placedComponents.find(c => c.id === id);
+  if (!placed) return;
+  // Save data for undo before deleting
+  const savedData = {
+    id: placed.id,
+    type: placed.type,
+    face: placed.face,
+    localPos: { u: placed.localPos.u, v: placed.localPos.v },
+  };
+  pushUndo({ type: 'delete', componentData: savedData });
+  deleteComponent(id);
+}
+
 const deleteBtn = document.getElementById('delete-component');
 if (deleteBtn) {
   deleteBtn.addEventListener('click', () => {
-    if (state.selectedId != null) deleteComponent(state.selectedId);
+    if (state.selectedId != null) deleteWithUndo(state.selectedId);
   });
 }
 
@@ -593,7 +779,14 @@ document.addEventListener('keydown', (e) => {
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    if (state.selectedId != null) deleteComponent(state.selectedId);
+    if (state.selectedId != null) deleteWithUndo(state.selectedId);
+  }
+
+  // Ctrl+Z / Cmd+Z: undo
+  if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    e.preventDefault();
+    performUndo();
   }
 });
 
