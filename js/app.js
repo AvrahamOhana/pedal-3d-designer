@@ -132,7 +132,24 @@ function createComponentMesh(comp, opts) {
     const innerR = Math.max(0.1, comp.holeDiameter / 2 - 1);
     geo = new THREE.RingGeometry(innerR, outerR, 32);
   } else {
-    geo = new THREE.PlaneGeometry(comp.holeWidth, comp.holeHeight);
+    // Build a rectangular ring (outline) for roundrect holes
+    const w = comp.holeWidth;
+    const h = comp.holeHeight;
+    const t = 1; // ring thickness
+    const shape = new THREE.Shape();
+    shape.moveTo(-w / 2 - t, -h / 2 - t);
+    shape.lineTo(w / 2 + t, -h / 2 - t);
+    shape.lineTo(w / 2 + t, h / 2 + t);
+    shape.lineTo(-w / 2 - t, h / 2 + t);
+    shape.closePath();
+    const hole = new THREE.Path();
+    hole.moveTo(-w / 2, -h / 2);
+    hole.lineTo(w / 2, -h / 2);
+    hole.lineTo(w / 2, h / 2);
+    hole.lineTo(-w / 2, h / 2);
+    hole.closePath();
+    shape.holes.push(hole);
+    geo = new THREE.ShapeGeometry(shape);
   }
 
   const mat = new THREE.MeshBasicMaterial({
@@ -140,7 +157,6 @@ function createComponentMesh(comp, opts) {
     transparent: opts.transparent !== undefined ? opts.transparent : true,
     opacity: opts.opacity !== undefined ? opts.opacity : 0.6,
     side: THREE.DoubleSide,
-    wireframe: comp.holeShape === 'roundrect' && opts.wireframe !== false,
     depthTest: true,
   });
 
@@ -483,6 +499,7 @@ viewport.addEventListener('pointerdown', (e) => {
       isDragging = true;
       dragComponentId = state.selectedId;
       controls.enabled = false;
+      viewport.setPointerCapture(e.pointerId);
       e.preventDefault();
     }
   }
@@ -495,6 +512,7 @@ viewport.addEventListener('pointerup', (e) => {
     isDragging = false;
     dragComponentId = null;
     controls.enabled = true;
+    viewport.releasePointerCapture(e.pointerId);
   }
 
   // If it was a real drag (pointer moved), just stop -- don't interpret as click
