@@ -278,6 +278,106 @@ function constrainUV(u, v, comp, face, dims) {
 }
 
 // ============================================================
+// Alignment snap guides
+// ============================================================
+
+const ALIGN_SNAP_TOLERANCE = 0.5; // mm
+
+// Persistent guide line meshes (created once, shown/hidden)
+let guideLineU = null; // vertical guide
+let guideLineV = null; // horizontal guide
+const guideMaterial = new THREE.LineDashedMaterial({
+  color: 0x00f0ff,
+  dashSize: 2,
+  gapSize: 1,
+  depthTest: true,
+});
+
+function createGuideLine() {
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(1, 0, 0),
+  ]);
+  const line = new THREE.Line(geo, guideMaterial.clone());
+  line.visible = false;
+  line.renderOrder = 2;
+  scene.add(line);
+  return line;
+}
+
+function initGuideLines() {
+  if (!guideLineU) guideLineU = createGuideLine();
+  if (!guideLineV) guideLineV = createGuideLine();
+}
+
+/** Check alignment with other placed components and snap if within tolerance.
+ *  Returns { u, v, guideU: boolean, guideV: boolean } */
+function checkAlignmentSnap(u, v, face, excludeId) {
+  let snappedU = u;
+  let snappedV = v;
+  let guideU = false;
+  let guideV = false;
+
+  for (const placed of state.placedComponents) {
+    if (placed.id === excludeId) continue;
+    if (placed.face !== face) continue;
+
+    if (!guideU && Math.abs(u - placed.localPos.u) <= ALIGN_SNAP_TOLERANCE) {
+      snappedU = placed.localPos.u;
+      guideU = true;
+    }
+    if (!guideV && Math.abs(v - placed.localPos.v) <= ALIGN_SNAP_TOLERANCE) {
+      snappedV = placed.localPos.v;
+      guideV = true;
+    }
+    if (guideU && guideV) break;
+  }
+
+  return { u: snappedU, v: snappedV, guideU, guideV };
+}
+
+/** Update guide line positions and visibility */
+function updateGuideLines(face, snapResult, dims) {
+  initGuideLines();
+
+  if (snapResult.guideU) {
+    const { vSize } = getFaceDims(face, dims);
+    const p1 = localToWorld(face, snapResult.u, -vSize / 2, dims);
+    const p2 = localToWorld(face, snapResult.u, vSize / 2, dims);
+    const positions = guideLineU.geometry.attributes.position;
+    positions.setXYZ(0, p1.x, p1.y, p1.z);
+    positions.setXYZ(1, p2.x, p2.y, p2.z);
+    positions.needsUpdate = true;
+    guideLineU.geometry.computeBoundingSphere();
+    guideLineU.computeLineDistances();
+    guideLineU.visible = true;
+  } else {
+    guideLineU.visible = false;
+  }
+
+  if (snapResult.guideV) {
+    const { uSize } = getFaceDims(face, dims);
+    const p1 = localToWorld(face, -uSize / 2, snapResult.v, dims);
+    const p2 = localToWorld(face, uSize / 2, snapResult.v, dims);
+    const positions = guideLineV.geometry.attributes.position;
+    positions.setXYZ(0, p1.x, p1.y, p1.z);
+    positions.setXYZ(1, p2.x, p2.y, p2.z);
+    positions.needsUpdate = true;
+    guideLineV.geometry.computeBoundingSphere();
+    guideLineV.computeLineDistances();
+    guideLineV.visible = true;
+  } else {
+    guideLineV.visible = false;
+  }
+}
+
+/** Hide all guide lines */
+function hideGuideLines() {
+  if (guideLineU) guideLineU.visible = false;
+  if (guideLineV) guideLineV.visible = false;
+}
+
+// ============================================================
 // Overlap detection
 // ============================================================
 
@@ -498,6 +598,7 @@ function deselectComponent() {
   state.selectedId = null;
   const propsPanel = document.getElementById('properties-panel');
   if (propsPanel) propsPanel.classList.add('hidden');
+  hideGuideLines();
   updatePlacedList();
 }
 
@@ -643,7 +744,14 @@ viewport.addEventListener('pointermove', (e) => {
       const dims = state.enclosure.dims;
       const local = worldToLocal(placed.face, hits[0].point, dims);
       const constrained = constrainUV(local.u, local.v, comp, placed.face, dims);
-      const hasOverlap = checkOverlap(placed.type, placed.face, constrained.u, constrained.v, dragComponentId);
+
+      // Alignment snap (overrides grid snap if within tolerance)
+      const alignSnap = checkAlignmentSnap(constrained.u, constrained.v, placed.face, dragComponentId);
+      const finalU = alignSnap.guideU ? alignSnap.u : constrained.u;
+      const finalV = alignSnap.guideV ? alignSnap.v : constrained.v;
+      updateGuideLines(placed.face, { ...alignSnap, u: finalU, v: finalV }, dims);
+
+      const hasOverlap = checkOverlap(placed.type, placed.face, finalU, finalV, dragComponentId);
 
       const marker = markerMeshes.find(m => m.userData.componentId === dragComponentId);
       if (marker) {
@@ -658,10 +766,12 @@ viewport.addEventListener('pointermove', (e) => {
         marker.userData.dragInvalid = hasOverlap;
       }
 
-      moveComponent(dragComponentId, local.u, local.v);
+      moveComponent(dragComponentId, finalU, finalV);
 
       if (propXInput) propXInput.value = placed.localPos.u.toFixed(1);
       if (propYInput) propYInput.value = placed.localPos.v.toFixed(1);
+    } else {
+      hideGuideLines();
     }
     return;
   }
@@ -678,13 +788,14 @@ viewport.addEventListener('pointermove', (e) => {
   if (hits.length === 0) {
     ghostMesh.visible = false;
     ghostFace = null;
+    hideGuideLines();
     return;
   }
 
   const hit = hits[0];
   const face = hit.object.userData.face;
   const comp = COMPONENTS[state.activeComponent];
-  if (!comp) { ghostMesh.visible = false; return; }
+  if (!comp) { ghostMesh.visible = false; hideGuideLines(); return; }
 
   const isValid = comp.validFaces.includes(face);
   ghostValid = isValid;
@@ -693,10 +804,17 @@ viewport.addEventListener('pointermove', (e) => {
   const dims = state.enclosure.dims;
   const local = worldToLocal(face, hit.point, dims);
   const constrained = constrainUV(local.u, local.v, comp, face, dims);
-  const worldPos = localToWorld(face, constrained.u, constrained.v, dims);
+
+  // Alignment snap (overrides grid snap if within tolerance)
+  const alignSnap = checkAlignmentSnap(constrained.u, constrained.v, face, null);
+  const finalU = alignSnap.guideU ? alignSnap.u : constrained.u;
+  const finalV = alignSnap.guideV ? alignSnap.v : constrained.v;
+  updateGuideLines(face, { ...alignSnap, u: finalU, v: finalV }, dims);
+
+  const worldPos = localToWorld(face, finalU, finalV, dims);
 
   // Check for overlap with existing components
-  const hasOverlap = isValid && checkOverlap(state.activeComponent, face, constrained.u, constrained.v);
+  const hasOverlap = isValid && checkOverlap(state.activeComponent, face, finalU, finalV);
   ghostValid = isValid && !hasOverlap;
 
   ghostMesh.position.copy(worldPos);
@@ -758,6 +876,7 @@ viewport.addEventListener('pointerup', (e) => {
     dragPrevLocalPos = null;
     controls.enabled = true;
     viewport.releasePointerCapture(e.pointerId);
+    hideGuideLines();
   }
 
   // If it was a real drag (pointer moved), push undo and stop
@@ -790,6 +909,7 @@ viewport.addEventListener('pointerup', (e) => {
 
     const id = placeComponent(state.activeComponent, ghostFace, local.u, local.v);
     if (id != null) pushUndo({ type: 'place', componentId: id });
+    hideGuideLines();
     return;
   }
 
@@ -867,6 +987,7 @@ document.addEventListener('keydown', (e) => {
     state.activeComponent = null;
     updateGhost();
     deselectComponent();
+    hideGuideLines();
   }
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1020,6 +1141,7 @@ function populateComponentPanel() {
       if (btn.classList.contains('active')) {
         btn.classList.remove('active');
         state.activeComponent = null;
+        hideGuideLines();
       } else {
         const prev = list.querySelector('.component-btn.active');
         if (prev) prev.classList.remove('active');
