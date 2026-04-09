@@ -17,6 +17,11 @@ export async function exportSTL(dims, screwType, screwPositions, placedComponent
     dims, screwType, screwPositions, placedComponents, componentDefs
   );
 
+  // Rotate from Y-up (Three.js) to Z-up (STL/slicer convention)
+  const yToZ = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+  bottomMesh.geometry.applyMatrix4(yToZ);
+  lidMesh.geometry.applyMatrix4(yToZ);
+
   const exporter = new STLExporter();
   const bottomSTL = exporter.parse(bottomMesh, { binary: true }).buffer;
   const lidSTL = exporter.parse(lidMesh, { binary: true }).buffer;

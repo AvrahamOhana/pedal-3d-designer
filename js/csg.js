@@ -134,7 +134,7 @@ export function buildExportMeshes(dims, screwType, screwPositions, placedCompone
   // 3. Subtract cavity from outer
   let bottomResult = evaluator.evaluate(outerBrush, innerBrush, SUBTRACTION);
 
-  // 4. Add screw bosses
+  // 4. Add screw bosses (with insert holes pre-subtracted)
   const bossH = dims.bottomH - WALL;
   for (const pos of screwPositions) {
     const bossBrush = makeCylinder(
@@ -142,17 +142,14 @@ export function buildExportMeshes(dims, screwType, screwPositions, placedCompone
       bossH,
       new THREE.Vector3(pos.x, WALL + bossH / 2, pos.z)
     );
-    bottomResult = evaluator.evaluate(toBrush(bottomResult), bossBrush, ADDITION);
-  }
-
-  // 5. Subtract screw insert holes from bosses
-  for (const pos of screwPositions) {
+    // Subtract insert hole from boss before adding to bottom
     const holeBrush = makeCylinder(
       screw.bossHole / 2,
-      screw.depth + 1,
+      screw.depth + 2,
       new THREE.Vector3(pos.x, dims.bottomH - screw.depth / 2, pos.z)
     );
-    bottomResult = evaluator.evaluate(toBrush(bottomResult), holeBrush, SUBTRACTION);
+    const bossWithHole = evaluator.evaluate(bossBrush, holeBrush, SUBTRACTION);
+    bottomResult = evaluator.evaluate(toBrush(bottomResult), toBrush(bossWithHole), ADDITION);
   }
 
   // 6. Subtract component holes from bottom (side faces only)
