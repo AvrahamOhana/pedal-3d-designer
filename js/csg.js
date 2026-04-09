@@ -184,7 +184,22 @@ export function buildExportMeshes(dims, screwType, screwPositions, placedCompone
   lipBrush.position.set(0, dims.bottomH - LIP / 2, 0);
   lipBrush.updateMatrixWorld();
 
-  let lidResult = evaluator.evaluate(lidPlateBrush, lipBrush, ADDITION);
+  // Subtract boss clearance from lip so it fits around screw bosses
+  let lipResult = lipBrush;
+  for (const pos of screwPositions) {
+    const clearanceBrush = makeCylinder(
+      screw.bossOuter / 2 + 0.3,  // 0.3mm clearance around boss
+      LIP + 2,
+      new THREE.Vector3(pos.x, dims.bottomH - LIP / 2, pos.z)
+    );
+    lipResult = toBrush(evaluator.evaluate(
+      lipResult instanceof Brush ? lipResult : toBrush(lipResult),
+      clearanceBrush,
+      SUBTRACTION
+    ));
+  }
+
+  let lidResult = evaluator.evaluate(lidPlateBrush, lipResult, ADDITION);
 
   // 3. Subtract screw through-holes
   // First, union all hole cylinders into one brush, then subtract once
