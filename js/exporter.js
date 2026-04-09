@@ -18,8 +18,8 @@ export async function exportSTL(dims, screwType, screwPositions, placedComponent
   );
 
   const exporter = new STLExporter();
-  const bottomSTL = exporter.parse(bottomMesh, { binary: true });
-  const lidSTL = exporter.parse(lidMesh, { binary: true });
+  const bottomSTL = exporter.parse(bottomMesh, { binary: true }).buffer;
+  const lidSTL = exporter.parse(lidMesh, { binary: true }).buffer;
 
   const zip = new JSZip();
   zip.file('enclosure-bottom.stl', bottomSTL);
