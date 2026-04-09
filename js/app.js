@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createEnclosure, PRESETS, SCREW_SPECS } from './enclosure.js';
+import { COMPONENTS } from './components.js';
 
 // --- Scene ---
 const scene = new THREE.Scene();
@@ -172,6 +173,51 @@ screwTypeSelect.addEventListener('change', () => {
 });
 
 // ============================================================
+// Component panel
+// ============================================================
+function populateComponentPanel() {
+  const list = document.getElementById('component-list');
+  if (!list) return;
+  list.innerHTML = '';
+
+  for (const [key, comp] of Object.entries(COMPONENTS)) {
+    const btn = document.createElement('button');
+    btn.className = 'component-btn';
+    btn.textContent = comp.name;
+    btn.dataset.type = key;
+
+    btn.addEventListener('click', () => {
+      if (btn.classList.contains('active')) {
+        btn.classList.remove('active');
+        state.activeComponent = null;
+      } else {
+        const prev = list.querySelector('.component-btn.active');
+        if (prev) prev.classList.remove('active');
+        btn.classList.add('active');
+        state.activeComponent = key;
+      }
+    });
+
+    list.appendChild(btn);
+  }
+}
+
+// Escape key deselects active component
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const list = document.getElementById('component-list');
+    if (list) {
+      const active = list.querySelector('.component-btn.active');
+      if (active) active.classList.remove('active');
+    }
+    state.activeComponent = null;
+  }
+});
+
+// ============================================================
 // Initial build
 // ============================================================
 rebuildEnclosure();
+populateComponentPanel();
+
+export { COMPONENTS };
