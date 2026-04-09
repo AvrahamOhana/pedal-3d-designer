@@ -90,11 +90,21 @@ const dimensionsDisplay = document.getElementById('dimensions-display');
 // rebuildEnclosure
 // ============================================================
 export function rebuildEnclosure() {
-  // Remove old enclosure objects from scene
+  // Remove old enclosure objects from scene and dispose GPU resources
   if (state.enclosure) {
-    scene.remove(state.enclosure.bottomGroup);
-    scene.remove(state.enclosure.lidGroup);
+    const disposeGroup = (group) => {
+      group.traverse(child => {
+        if (child.isMesh) {
+          child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        }
+      });
+      scene.remove(group);
+    };
+    disposeGroup(state.enclosure.bottomGroup);
+    disposeGroup(state.enclosure.lidGroup);
     for (const plane of Object.values(state.enclosure.facesMeshes)) {
+      plane.geometry.dispose();
       scene.remove(plane);
     }
   }
