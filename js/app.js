@@ -7,7 +7,7 @@ import { createComponentModel, getModelRotation } from './models.js';
 
 // --- Scene ---
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a2e);
+scene.background = new THREE.Color(0x0a0a1a);
 
 // --- Camera ---
 const camera = new THREE.PerspectiveCamera(
@@ -40,7 +40,7 @@ directionalLight.position.set(50, 100, 50);
 scene.add(directionalLight);
 
 // --- Grid ---
-const gridHelper = new THREE.GridHelper(200, 40, 0x533483, 0x333355);
+const gridHelper = new THREE.GridHelper(200, 40, 0x1a1040, 0x12082a);
 scene.add(gridHelper);
 
 // --- Resize handler ---
