@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createEnclosure, PRESETS, SCREW_SPECS } from './enclosure.js';
 import { COMPONENTS } from './components.js';
 import { exportSTL } from './exporter.js';
+import { createComponentModel, getModelRotation } from './models.js';
 
 // --- Scene ---
 const scene = new THREE.Scene();
@@ -171,12 +172,27 @@ function createComponentMesh(comp, opts) {
   return mesh;
 }
 
-/** Dispose geometry + material, remove from scene */
-function disposeMesh(mesh) {
-  if (!mesh) return;
-  mesh.geometry.dispose();
-  mesh.material.dispose();
-  scene.remove(mesh);
+/** Dispose geometry + material, remove from scene. Handles Groups and single Meshes. */
+function disposeMesh(obj) {
+  if (!obj) return;
+  if (obj.isGroup) {
+    obj.traverse(child => {
+      if (child.isMesh) {
+        child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      }
+    });
+  } else if (obj.isMesh) {
+    obj.geometry.dispose();
+    if (obj.material) obj.material.dispose();
+  }
+  scene.remove(obj);
 }
 
 // ============================================================
@@ -339,14 +355,21 @@ function performUndo() {
       const dims = state.enclosure.dims;
       const worldPos = localToWorld(data.face, data.localPos.u, data.localPos.v, dims);
 
-      const marker = createComponentMesh(comp, {
-        color: comp.color,
-        transparent: comp.holeShape === 'roundrect',
-        opacity: comp.holeShape === 'roundrect' ? 0.8 : 1.0,
-      });
-      marker.position.copy(worldPos);
-      marker.rotation.copy(getFaceRotation(data.face));
-      marker.userData.componentId = data.id;
+      let marker = createComponentModel(data.type, comp.color);
+      if (marker) {
+        marker.position.copy(worldPos);
+        marker.rotation.copy(getModelRotation(data.face));
+        marker.userData.componentId = data.id;
+      } else {
+        marker = createComponentMesh(comp, {
+          color: comp.color,
+          transparent: comp.holeShape === 'roundrect',
+          opacity: comp.holeShape === 'roundrect' ? 0.8 : 1.0,
+        });
+        marker.position.copy(worldPos);
+        marker.rotation.copy(getFaceRotation(data.face));
+        marker.userData.componentId = data.id;
+      }
       scene.add(marker);
       markerMeshes.push(marker);
 
@@ -378,6 +401,20 @@ function performUndo() {
       break;
     }
   }
+}
+
+// ============================================================
+// Helper: walk up parent chain to find componentId on a Group or Mesh
+// ============================================================
+function findComponentId(obj) {
+  let current = obj;
+  while (current) {
+    if (current.userData && current.userData.componentId != null) {
+      return current.userData.componentId;
+    }
+    current = current.parent;
+  }
+  return null;
 }
 
 // ============================================================
@@ -414,7 +451,22 @@ function selectComponent(id) {
   if (!placed) return;
 
   const marker = markerMeshes.find(m => m.userData.componentId === id);
-  if (marker) marker.material.color.setHex(0x4488ff);
+  if (marker) {
+    if (marker.isGroup) {
+      // Save original materials and tint blue
+      marker.traverse(child => {
+        if (child.isMesh) {
+          child.userData._origMaterial = child.material;
+          const tinted = child.material.clone();
+          tinted.color.setHex(0x4488ff);
+          if (tinted.emissive) tinted.emissive.setHex(0x2244aa);
+          child.material = tinted;
+        }
+      });
+    } else {
+      marker.material.color.setHex(0x4488ff);
+    }
+  }
 
   const propsPanel = document.getElementById('properties-panel');
   if (propsPanel) propsPanel.classList.remove('hidden');
@@ -429,8 +481,18 @@ function deselectComponent() {
     const placed = state.placedComponents.find(c => c.id === state.selectedId);
     const marker = markerMeshes.find(m => m.userData.componentId === state.selectedId);
     if (marker && placed) {
-      const comp = COMPONENTS[placed.type];
-      if (comp) marker.material.color.setHex(comp.color);
+      if (marker.isGroup) {
+        marker.traverse(child => {
+          if (child.isMesh && child.userData._origMaterial) {
+            child.material.dispose();
+            child.material = child.userData._origMaterial;
+            delete child.userData._origMaterial;
+          }
+        });
+      } else {
+        const comp = COMPONENTS[placed.type];
+        if (comp) marker.material.color.setHex(comp.color);
+      }
     }
   }
   state.selectedId = null;
@@ -477,15 +539,23 @@ function placeComponent(compKey, face, u, v) {
   const worldPos = localToWorld(face, constrained.u, constrained.v, dims);
 
   const id = nextComponentId++;
-  const marker = createComponentMesh(comp, {
-    color: comp.color,
-    transparent: comp.holeShape === 'roundrect',
-    opacity: comp.holeShape === 'roundrect' ? 0.8 : 1.0,
-    wireframe: false,
-  });
-  marker.position.copy(worldPos);
-  marker.rotation.copy(getFaceRotation(face));
-  marker.userData.componentId = id;
+  let marker = createComponentModel(compKey, comp.color);
+  if (marker) {
+    marker.position.copy(worldPos);
+    marker.rotation.copy(getModelRotation(face));
+    marker.userData.componentId = id;
+  } else {
+    // Fallback to flat ring
+    marker = createComponentMesh(comp, {
+      color: comp.color,
+      transparent: comp.holeShape === 'roundrect',
+      opacity: comp.holeShape === 'roundrect' ? 0.8 : 1.0,
+      wireframe: false,
+    });
+    marker.position.copy(worldPos);
+    marker.rotation.copy(getFaceRotation(face));
+    marker.userData.componentId = id;
+  }
   scene.add(marker);
   markerMeshes.push(marker);
 
@@ -577,10 +647,16 @@ viewport.addEventListener('pointermove', (e) => {
 
       const marker = markerMeshes.find(m => m.userData.componentId === dragComponentId);
       if (marker) {
-        marker.material.color.setHex(hasOverlap ? 0xff4444 : 0x4488ff);
+        const tintColor = hasOverlap ? 0xff4444 : 0x4488ff;
+        if (marker.isGroup) {
+          marker.traverse(child => {
+            if (child.isMesh) child.material.color.setHex(tintColor);
+          });
+        } else {
+          marker.material.color.setHex(tintColor);
+        }
+        marker.userData.dragInvalid = hasOverlap;
       }
-      // Store drag-valid state on the marker for use in pointerup
-      if (marker) marker.userData.dragInvalid = hasOverlap;
 
       moveComponent(dragComponentId, local.u, local.v);
 
@@ -637,8 +713,8 @@ viewport.addEventListener('pointerdown', (e) => {
   if (!state.activeComponent && state.selectedId != null) {
     getNDC(e);
     raycaster.setFromCamera(mouse, camera);
-    const hits = raycaster.intersectObjects(markerMeshes);
-    if (hits.length > 0 && hits[0].object.userData.componentId === state.selectedId) {
+    const hits = raycaster.intersectObjects(markerMeshes, true);
+    if (hits.length > 0 && findComponentId(hits[0].object) === state.selectedId) {
       isDragging = true;
       dragComponentId = state.selectedId;
       // Save position for undo
@@ -662,7 +738,18 @@ viewport.addEventListener('pointerup', (e) => {
     if (marker && marker.userData.dragInvalid && prevDragPos) {
       // Revert to previous position
       moveComponent(dragComponentId, prevDragPos.u, prevDragPos.v);
-      marker.material.color.setHex(0x4488ff); // restore selected color
+      if (marker.isGroup) {
+        // Restore original materials (selection tint)
+        marker.traverse(child => {
+          if (child.isMesh && child.userData._origMaterial) {
+            child.material.dispose();
+            child.material = child.userData._origMaterial.clone();
+            child.material.color.setHex(0x4488ff);
+          }
+        });
+      } else {
+        marker.material.color.setHex(0x4488ff); // restore selected color
+      }
       marker.userData.dragInvalid = false;
     }
 
@@ -710,10 +797,13 @@ viewport.addEventListener('pointerup', (e) => {
   if (!state.activeComponent) {
     getNDC(e);
     raycaster.setFromCamera(mouse, camera);
-    const hits = raycaster.intersectObjects(markerMeshes);
+    const hits = raycaster.intersectObjects(markerMeshes, true);
     if (hits.length > 0) {
-      selectComponent(hits[0].object.userData.componentId);
-      return;
+      const compId = findComponentId(hits[0].object);
+      if (compId != null) {
+        selectComponent(compId);
+        return;
+      }
     }
   }
 
@@ -865,7 +955,7 @@ export function rebuildEnclosure() {
       const marker = markerMeshes.find(m => m.userData.componentId === placed.id);
       if (marker) {
         marker.position.copy(worldPos);
-        marker.rotation.copy(getFaceRotation(placed.face));
+        marker.rotation.copy(marker.isGroup ? getModelRotation(placed.face) : getFaceRotation(placed.face));
       }
     }
 
