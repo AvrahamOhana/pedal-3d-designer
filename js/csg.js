@@ -139,18 +139,20 @@ export function buildExportMeshes(dims, screwType, screwPositions, placedCompone
   let bottomResult = evaluator.evaluate(outerBrush, innerBrush, SUBTRACTION);
 
   // 4. Add screw bosses (with insert holes pre-subtracted)
-  const bossH = dims.bottomH - WALL;
+  // Bosses stop below the lip zone so the lid lip can seat around them
+  const bossH = dims.bottomH - WALL - LIP;
   for (const pos of screwPositions) {
     const bossBrush = makeCylinder(
       screw.bossOuter / 2,
       bossH,
       new THREE.Vector3(pos.x, WALL + bossH / 2, pos.z)
     );
-    // Subtract insert hole from boss before adding to bottom
+    // Subtract insert hole from top of boss
+    const bossTop = WALL + bossH;
     const holeBrush = makeCylinder(
       screw.bossHole / 2,
       screw.depth + 2,
-      new THREE.Vector3(pos.x, dims.bottomH - screw.depth / 2, pos.z)
+      new THREE.Vector3(pos.x, bossTop - screw.depth / 2, pos.z)
     );
     const bossWithHole = evaluator.evaluate(bossBrush, holeBrush, SUBTRACTION);
     bottomResult = evaluator.evaluate(toBrush(bottomResult), toBrush(bossWithHole), ADDITION);
