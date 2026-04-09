@@ -6,9 +6,13 @@ const csgMat = new THREE.MeshStandardMaterial({ color: 0x4a90d9 });
 
 /**
  * Helper: wrap an Evaluator result (Mesh) back into a Brush for chaining.
+ * Bakes the mesh's world matrix into the geometry so the Brush can sit at origin.
  */
 function toBrush(mesh) {
-  const brush = new Brush(mesh.geometry, csgMat);
+  const geo = mesh.geometry.clone();
+  mesh.updateMatrixWorld();
+  geo.applyMatrix4(mesh.matrixWorld);
+  const brush = new Brush(geo, csgMat);
   brush.updateMatrixWorld();
   return brush;
 }
