@@ -187,14 +187,23 @@ export function buildExportMeshes(dims, screwType, screwPositions, placedCompone
   let lidResult = evaluator.evaluate(lidPlateBrush, lipBrush, ADDITION);
 
   // 3. Subtract screw through-holes
-  const throughH = LID_THICK + LIP + 2;
+  // First, union all hole cylinders into one brush, then subtract once
+  const throughH = LID_THICK + LIP + 4;
+  let screwHolesLid = null;
   for (const pos of screwPositions) {
     const holeBrush = makeCylinder(
       screw.throughHole / 2,
       throughH,
       new THREE.Vector3(pos.x, dims.bottomH + LID_THICK / 2, pos.z)
     );
-    lidResult = evaluator.evaluate(toBrush(lidResult), holeBrush, SUBTRACTION);
+    if (!screwHolesLid) {
+      screwHolesLid = holeBrush;
+    } else {
+      screwHolesLid = toBrush(evaluator.evaluate(screwHolesLid, holeBrush, ADDITION));
+    }
+  }
+  if (screwHolesLid) {
+    lidResult = evaluator.evaluate(toBrush(lidResult), screwHolesLid, SUBTRACTION);
   }
 
   // 4. Add reinforcement + subtract component holes from lid (top face only)
