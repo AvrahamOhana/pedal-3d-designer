@@ -196,12 +196,50 @@ export function buildExportMeshes(dims, screwType, screwPositions, placedCompone
     lidResult = evaluator.evaluate(toBrush(lidResult), holeBrush, SUBTRACTION);
   }
 
-  // 4. Subtract component holes from lid (top face only)
+  // 4. Add reinforcement + subtract component holes from lid (top face only)
   for (const placed of placedComponents) {
     if (placed.face !== 'top') continue;
     const comp = componentDefs[placed.type];
     if (!comp) continue;
 
+    // Add reinforcement geometry before subtracting the hole
+    if (comp.reinforced) {
+      const reinforceR = comp.reinforceOuter / 2;
+      const reinforceH = comp.reinforceThick;
+      const reinforceY = dims.bottomH - reinforceH / 2;
+
+      // Solid cylinder (the hole subtraction later will cut through it)
+      const ringBrush = makeCylinder(
+        reinforceR,
+        reinforceH,
+        new THREE.Vector3(placed.position.x, reinforceY, placed.position.z)
+      );
+      lidResult = evaluator.evaluate(toBrush(lidResult), ringBrush, ADDITION);
+
+      // Radial gusset ribs
+      const ribCount = comp.ribCount || 4;
+      const ribWidth = 1.5;
+      const ribLength = reinforceR;  // from center outward to ring edge
+      for (let i = 0; i < ribCount; i++) {
+        const angle = i * (2 * Math.PI / ribCount);
+        const offsetX = Math.cos(angle) * (ribLength / 2);
+        const offsetZ = Math.sin(angle) * (ribLength / 2);
+        const ribBrush = makeBox(
+          ribWidth,
+          reinforceH,
+          ribLength,
+          new THREE.Vector3(
+            placed.position.x + offsetX,
+            reinforceY,
+            placed.position.z + offsetZ
+          ),
+          new THREE.Euler(0, -angle, 0)
+        );
+        lidResult = evaluator.evaluate(toBrush(lidResult), ribBrush, ADDITION);
+      }
+    }
+
+    // Subtract the component hole (cuts through lid plate + reinforcement)
     const holeBrush = makeHoleBrush(comp, placed.face, placed.position);
     lidResult = evaluator.evaluate(toBrush(lidResult), holeBrush, SUBTRACTION);
   }
