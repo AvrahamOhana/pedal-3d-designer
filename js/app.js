@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createEnclosure, PRESETS, SCREW_SPECS } from './enclosure.js';
 import { COMPONENTS } from './components.js';
+import { exportSTL } from './exporter.js';
 
 // --- Scene ---
 const scene = new THREE.Scene();
@@ -746,6 +747,37 @@ function populateComponentPanel() {
 
     list.appendChild(btn);
   }
+}
+
+// ============================================================
+// Export STL
+// ============================================================
+
+const exportBtn = document.getElementById('export-stl');
+if (exportBtn) {
+  exportBtn.addEventListener('click', async () => {
+    if (!state.enclosure) return;
+
+    exportBtn.disabled = true;
+    const origText = exportBtn.textContent;
+    exportBtn.textContent = 'Exporting...';
+
+    try {
+      await exportSTL(
+        state.enclosure.dims,
+        state.screwType,
+        state.enclosure.screwPositions,
+        state.placedComponents,
+        COMPONENTS
+      );
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Export failed: ' + err.message);
+    } finally {
+      exportBtn.disabled = false;
+      exportBtn.textContent = origText;
+    }
+  });
 }
 
 // ============================================================
